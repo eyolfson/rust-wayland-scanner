@@ -610,7 +610,7 @@ emit_type(struct arg *a)
 		printf("uint32_t");
 		break;
 	case FIXED:
-		printf("wl_fixed_t");
+		printf("raw::wl_fixed_t");
 		break;
 	case STRING:
 		printf("*const c_char");
@@ -638,7 +638,7 @@ emit_stubs(struct wl_list *message_list, struct interface *interface)
 	       interface->name, interface->name, interface->name,
 	       interface->name);
 
-	printf("#[inline(always)\npub unsafe fn "
+	printf("#[inline(always)]\npub unsafe fn "
 	       "%s_get_user_data(\n    %s: *mut objects::%s\n) -> *mut c_void {\n"
 	       "    raw::wl_proxy_get_user_data(%s as *mut objects::wl_proxy)\n"
 	       "}\n\n",
@@ -728,7 +728,7 @@ emit_stubs(struct wl_list *message_list, struct interface *interface)
 			if (ret->interface_name == NULL)
 				printf("interface");
 			else
-				printf("&%s_interface", ret->interface_name);
+				printf("&raw::%s_interface", ret->interface_name);
 		} else {
 			printf("    raw::wl_proxy_marshal(\n        %s as *mut objects::wl_proxy,\n"
 			       "        %s_%s",
@@ -746,20 +746,22 @@ emit_stubs(struct wl_list *message_list, struct interface *interface)
 				printf(",\n        %s", a->name);
 			}
 		}
-		printf("\n    );");
+		printf("\n    )");
 
-		if (m->destructor)
+		if (m->destructor) {
+                    printf(";");
 			printf("\n    raw::wl_proxy_destroy("
-			       "%s as *mut objects::wl_proxy)\n",
+			       "%s as *mut objects::wl_proxy)",
 			       interface->name);
+                }
 
 		if (ret && ret->interface_name == NULL)
-			printf("\n    %s as *mut c_void\n", ret->name);
+			printf(";\n    %s as *mut c_void", ret->name);
 		else if (ret)
-			printf("\n    %s as *mut objects::%s;\n",
-			       ret->interface_name, ret->name);
+			printf(";\n    %s as *mut objects::%s",
+			       ret->name, ret->interface_name);
 
-		printf("}\n\n");
+		printf("\n}\n\n");
 	}
 }
 
@@ -943,7 +945,7 @@ emit_structs(struct wl_list *message_list, struct interface *interface, enum sid
                 }
                 printf("\n");
 	}
-	printf("};\n\n");
+	printf("}\n\n");
 
 	if (side == CLIENT) {
 	    printf("#[inline(always)]\npub unsafe fn "
