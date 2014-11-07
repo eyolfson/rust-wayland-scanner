@@ -578,7 +578,7 @@ emit_opcodes(struct wl_list *message_list, struct interface *interface)
 
 	opcode = 0;
 	wl_list_for_each(m, message_list, link)
-		printf("#define %s_%s\t%d\n",
+		printf("pub const %s_%s: uint32_t = %d;\n",
 		       interface->uppercase_name, m->uppercase_name, opcode++);
 
 	printf("\n");
@@ -603,23 +603,23 @@ emit_type(struct arg *a)
 	default:
 	case INT:
 	case FD:
-		printf("int32_t ");
+		printf("int32_t");
 		break;
 	case NEW_ID:
 	case UNSIGNED:
-		printf("uint32_t ");
+		printf("uint32_t");
 		break;
 	case FIXED:
-		printf("wl_fixed_t ");
+		printf("wl_fixed_t");
 		break;
 	case STRING:
-		printf("const char *");
+		printf("*const c_char");
 		break;
 	case OBJECT:
-		printf("struct %s *", a->interface_name);
+		printf("*mut objects::%s", a->interface_name);
 		break;
 	case ARRAY:
-		printf("struct wl_array *");
+		printf("*mut utils::wl_array");
 		break;
 	}
 }
@@ -631,18 +631,16 @@ emit_stubs(struct wl_list *message_list, struct interface *interface)
 	struct arg *a, *ret;
 	int has_destructor, has_destroy;
 
-	printf("static inline void\n"
-	       "%s_set_user_data(struct %s *%s, void *user_data)\n"
-	       "{\n"
-	       "\twl_proxy_set_user_data((struct wl_proxy *) %s, user_data);\n"
+	printf("#[inline(always)]\npub unsafe fn "
+	       "%s_set_user_data(\n    %s: *mut objects::%s,\n    user_data: *mut c_void\n) {\n"
+	       "    raw::wl_proxy_set_user_data(\n        %s as *mut objects::wl_proxy,\n        user_data\n    )\n"
 	       "}\n\n",
 	       interface->name, interface->name, interface->name,
 	       interface->name);
 
-	printf("static inline void *\n"
-	       "%s_get_user_data(struct %s *%s)\n"
-	       "{\n"
-	       "\treturn wl_proxy_get_user_data((struct wl_proxy *) %s);\n"
+	printf("#[inline(always)\npub unsafe fn "
+	       "%s_get_user_data(\n    %s: *mut objects::%s\n) -> *mut c_void {\n"
+	       "    raw::wl_proxy_get_user_data(%s as *mut objects::wl_proxy)\n"
 	       "}\n\n",
 	       interface->name, interface->name, interface->name,
 	       interface->name);
@@ -665,11 +663,10 @@ emit_stubs(struct wl_list *message_list, struct interface *interface)
 	}
 
 	if (!has_destroy && strcmp(interface->name, "wl_display") != 0)
-		printf("static inline void\n"
-		       "%s_destroy(struct %s *%s)\n"
-		       "{\n"
-		       "\twl_proxy_destroy("
-		       "(struct wl_proxy *) %s);\n"
+		printf("#[inline(always)]\npub unsafe fn "
+		       "%s_destroy(%s: *mut objects::%s) {\n"
+		       "    raw::wl_proxy_destroy("
+		       "%s as *mut objects::wl_proxy)\n"
 		       "}\n\n",
 		       interface->name, interface->name, interface->name,
 		       interface->name);
@@ -691,39 +688,39 @@ emit_stubs(struct wl_list *message_list, struct interface *interface)
 			if (a->type == NEW_ID)
 				ret = a;
 		}
+ 
+                printf("#[inline(always)]\npub unsafe fn ");
 
-		if (ret && ret->interface_name == NULL)
-			printf("static inline void *\n");
-		else if (ret)
-			printf("static inline struct %s *\n",
-			       ret->interface_name);
-		else
-			printf("static inline void\n");
-
-		printf("%s_%s(struct %s *%s",
+		printf("%s_%s(\n    %s: *mut objects::%s",
 		       interface->name, m->name,
 		       interface->name, interface->name);
 
 		wl_list_for_each(a, &m->arg_list, link) {
 			if (a->type == NEW_ID && a->interface_name == NULL) {
-				printf(", const struct wl_interface *interface"
-				       ", uint32_t version");
+				printf(",\n    interface: *const utils::wl_interface"
+				       ",\n    version: uint32_t");
 				continue;
 			} else if (a->type == NEW_ID)
 				continue;
-			printf(", ");
+			printf(",\n    ");
+			printf("%s: ", a->name);
 			emit_type(a);
-			printf("%s", a->name);
 		}
 
-		printf(")\n"
-		       "{\n");
+                printf("\n) ");
+		if (ret && ret->interface_name == NULL)
+			printf("-> *mut c_void ");
+		else if (ret)
+			printf("-> *mut objects::%s ",
+			       ret->interface_name);
+
+		printf("{\n");
 		if (ret) {
-			printf("\tstruct wl_proxy *%s;\n\n"
-			       "\t%s = wl_proxy_marshal_constructor("
-			       "(struct wl_proxy *) %s,\n"
-			       "\t\t\t %s_%s, ",
-			       ret->name, ret->name,
+			printf("    let %s = "
+			       "raw::wl_proxy_marshal_constructor(\n        "
+			       "%s as *mut objects::wl_proxy,\n"
+			       "        %s_%s,\n        ",
+			       ret->name,
 			       interface->name,
 			       interface->uppercase_name,
 			       m->uppercase_name);
@@ -733,8 +730,8 @@ emit_stubs(struct wl_list *message_list, struct interface *interface)
 			else
 				printf("&%s_interface", ret->interface_name);
 		} else {
-			printf("\twl_proxy_marshal((struct wl_proxy *) %s,\n"
-			       "\t\t\t %s_%s",
+			printf("    raw::wl_proxy_marshal(\n        %s as *mut objects::wl_proxy,\n"
+			       "        %s_%s",
 			       interface->name,
 			       interface->uppercase_name,
 			       m->uppercase_name);
@@ -743,23 +740,23 @@ emit_stubs(struct wl_list *message_list, struct interface *interface)
 		wl_list_for_each(a, &m->arg_list, link) {
 			if (a->type == NEW_ID) {
 				if (a->interface_name == NULL)
-					printf(", interface->name, version");
-				printf(", NULL");
+					printf(",\n        (*interface).name,\n        version");
+				printf(",\n        ptr::null_mut::<c_void>()");
 			} else {
-				printf(", %s", a->name);
+				printf(",\n        %s", a->name);
 			}
 		}
-		printf(");\n");
+		printf("\n    );");
 
 		if (m->destructor)
-			printf("\n\twl_proxy_destroy("
-			       "(struct wl_proxy *) %s);\n",
+			printf("\n    raw::wl_proxy_destroy("
+			       "%s as *mut objects::wl_proxy)\n",
 			       interface->name);
 
 		if (ret && ret->interface_name == NULL)
-			printf("\n\treturn (void *) %s;\n", ret->name);
+			printf("\n    %s as *mut c_void\n", ret->name);
 		else if (ret)
-			printf("\n\treturn (struct %s *) %s;\n",
+			printf("\n    %s as *mut objects::%s;\n",
 			       ret->interface_name, ret->name);
 
 		printf("}\n\n");
@@ -816,38 +813,41 @@ emit_enumerations(struct interface *interface)
 	wl_list_for_each(e, &interface->enumeration_list, link) {
 		struct description *desc = e->description;
 
-		printf("#ifndef %s_%s_ENUM\n",
-		       interface->uppercase_name, e->uppercase_name);
-		printf("#define %s_%s_ENUM\n",
-		       interface->uppercase_name, e->uppercase_name);
+		/* printf("#ifndef %s_%s_ENUM\n", */
+		/*        interface->uppercase_name, e->uppercase_name); */
+		/* printf("#define %s_%s_ENUM\n", */
+		/*        interface->uppercase_name, e->uppercase_name); */
 
-		if (desc) {
-			printf("/**\n");
-			desc_dump(desc->summary,
-				  " * %s_%s - ",
-				  interface->name, e->name);
-			wl_list_for_each(entry, &e->entry_list, link) {
-				desc_dump(entry->summary,
-					  " * @%s_%s_%s: ",
-					  interface->uppercase_name,
-					  e->uppercase_name,
-					  entry->uppercase_name);
-			}
-			if (desc->text) {
-				printf(" *\n");
-				desc_dump(desc->text, " * ");
-			}
-			printf(" */\n");
-		}
-		printf("enum %s_%s {\n", interface->name, e->name);
+		/* if (desc) { */
+		/* 	printf("/\**\n"); */
+		/* 	desc_dump(desc->summary, */
+		/* 		  " * %s_%s - ", */
+		/* 		  interface->name, e->name); */
+		/* 	wl_list_for_each(entry, &e->entry_list, link) { */
+		/* 		desc_dump(entry->summary, */
+		/* 			  " * @%s_%s_%s: ", */
+		/* 			  interface->uppercase_name, */
+		/* 			  e->uppercase_name, */
+		/* 			  entry->uppercase_name); */
+		/* 	} */
+		/* 	if (desc->text) { */
+		/* 		printf(" *\n"); */
+		/* 		desc_dump(desc->text, " * "); */
+		/* 	} */
+		/* 	printf(" *\/\n"); */
+		/* } */
+                printf("// raw/types/enums.rs\n");
+		printf("#[repr(C)]\npub type %s_%s = uint32_t;\n", interface->name, e->name);
 		wl_list_for_each(entry, &e->entry_list, link)
-			printf("\t%s_%s_%s = %s,\n",
+			printf("pub const %s_%s_%s: %s_%s = %s;\n",
 			       interface->uppercase_name,
 			       e->uppercase_name,
-			       entry->uppercase_name, entry->value);
-		printf("};\n");
-		printf("#endif /* %s_%s_ENUM */\n\n",
-		       interface->uppercase_name, e->uppercase_name);
+			       entry->uppercase_name,
+                               interface->name, e->name,
+                               entry->value);
+		printf("\n");
+		/* printf("#endif /\* %s_%s_ENUM *\/\n\n", */
+		/*        interface->uppercase_name, e->uppercase_name); */
 	}
 }
 
@@ -861,48 +861,48 @@ emit_structs(struct wl_list *message_list, struct interface *interface, enum sid
 	if (wl_list_empty(message_list))
 		return;
 
-	if (interface->description) {
-		struct description *desc = interface->description;
-		printf("/**\n");
-		desc_dump(desc->summary, " * %s - ", interface->name);
-		wl_list_for_each(m, message_list, link) {
-			struct description *mdesc = m->description;
-			desc_dump(mdesc ? mdesc->summary : "(none)",
-				  " * @%s: ",
-				  m->name);
-		}
-		printf(" *\n");
-		desc_dump(desc->text, " * ");
-		printf(" */\n");
-	}
-	printf("struct %s_%s {\n", interface->name,
+	/* if (interface->description) { */
+	/* 	struct description *desc = interface->description; */
+	/* 	printf("/\**\n"); */
+	/* 	desc_dump(desc->summary, " * %s - ", interface->name); */
+	/* 	wl_list_for_each(m, message_list, link) { */
+	/* 		struct description *mdesc = m->description; */
+	/* 		desc_dump(mdesc ? mdesc->summary : "(none)", */
+	/* 			  " * @%s: ", */
+	/* 			  m->name); */
+	/* 	} */
+	/* 	printf(" *\n"); */
+	/* 	desc_dump(desc->text, " * "); */
+	/* 	printf(" *\/\n"); */
+	/* } */
+	printf("#[repr(C)]\npub struct %s_%s {\n", interface->name,
 	       (side == SERVER) ? "interface" : "listener");
 
 	wl_list_for_each(m, message_list, link) {
-		struct description *mdesc = m->description;
+		/* struct description *mdesc = m->description; */
 
-		printf("\t/**\n");
-		desc_dump(mdesc ? mdesc->summary : "(none)",
-			  "\t * %s - ", m->name);
-		wl_list_for_each(a, &m->arg_list, link) {
-			if (side == SERVER && a->type == NEW_ID &&
-			    a->interface_name == NULL)
-				printf("\t * @interface: name of the objects interface\n"
-				       "\t * @version: version of the objects interface\n");
+		/* printf("\t/\**\n"); */
+		/* desc_dump(mdesc ? mdesc->summary : "(none)", */
+		/* 	  "\t * %s - ", m->name); */
+		/* wl_list_for_each(a, &m->arg_list, link) { */
+		/* 	if (side == SERVER && a->type == NEW_ID && */
+		/* 	    a->interface_name == NULL) */
+		/* 		printf("\t * @interface: name of the objects interface\n" */
+		/* 		       "\t * @version: version of the objects interface\n"); */
 
 
-			desc_dump(a->summary ? a->summary : "(none)",
-				  "\t * @%s: ", a->name);
-		}
-		if (mdesc) {
-			printf("\t *\n");
-			desc_dump(mdesc->text, "\t * ");
-		}
-		if (m->since > 1) {
-			printf("\t * @since: %d\n", m->since);
-		}
-		printf("\t */\n");
-		printf("\tvoid (*%s)(", m->name);
+		/* 	desc_dump(a->summary ? a->summary : "(none)", */
+		/* 		  "\t * @%s: ", a->name); */
+		/* } */
+		/* if (mdesc) { */
+		/* 	printf("\t *\n"); */
+		/* 	desc_dump(mdesc->text, "\t * "); */
+		/* } */
+		/* if (m->since > 1) { */
+		/* 	printf("\t * @since: %d\n", m->since); */
+		/* } */
+		/* printf("\t *\/\n"); */
+		printf("    pub %s: extern fn(\n        ", m->name);
 
 		n = strlen(m->name) + 17;
 		if (side == SERVER) {
@@ -910,47 +910,52 @@ emit_structs(struct wl_list *message_list, struct interface *interface, enum sid
 			       "%sstruct wl_resource *resource",
 			       indent(n));
 		} else {
-			printf("void *data,\n"),
-			printf("%sstruct %s *%s",
-			       indent(n), interface->name, interface->name);
+			printf("data: *mut c_void,\n"),
+			printf("        %s: *mut objects::%s",
+			       interface->name, interface->name);
 		}
 
 		wl_list_for_each(a, &m->arg_list, link) {
-			printf(",\n%s", indent(n));
+			printf(",\n        ");
+			if (!(side == SERVER && a->type == NEW_ID && a->interface_name == NULL)) {
+                            printf("%s: ", a->name);
+                        }
 
 			if (side == SERVER && a->type == OBJECT)
-				printf("struct wl_resource *");
-			else if (side == SERVER && a->type == NEW_ID && a->interface_name == NULL)
-				printf("const char *interface, uint32_t version, uint32_t ");
+				printf("*mut objects::wl_resource");
+			else if (side == SERVER && a->type == NEW_ID && a->interface_name == NULL) {
+				printf("interface: *const c_char,\n        version: uint32_t,\n        uint32_t ");
+                                printf("%s: ", a->name);
+                                printf("uint32_t");
+                        }
 			else if (side == CLIENT && a->type == OBJECT && a->interface_name == NULL)
-				printf("void *");
+				printf("*mut c_void");
 
 			else if (side == CLIENT && a->type == NEW_ID)
-				printf("struct %s *", a->interface_name);
+				printf("*mut objects::%s", a->interface_name);
 			else
 				emit_type(a);
 
-			printf("%s", a->name);
 		}
-
-		printf(");\n");
+		printf("\n    )");
+                if (!(m->link.next == message_list)) {
+                    printf(",");
+                }
+                printf("\n");
 	}
-
 	printf("};\n\n");
 
 	if (side == CLIENT) {
-	    printf("static inline int\n"
-		   "%s_add_listener(struct %s *%s,\n"
-		   "%sconst struct %s_listener *listener, void *data)\n"
-		   "{\n"
-		   "\treturn wl_proxy_add_listener((struct wl_proxy *) %s,\n"
-		   "%s(void (**)(void)) listener, data);\n"
+	    printf("#[inline(always)]\npub unsafe fn "
+		   "%s_add_listener(\n    %s: *mut objects::%s,\n"
+		   "    listener: *const listeners::%s_listener,\n    data: *mut c_void\n) "
+		   "-> c_int {\n"
+		   "    raw::wl_proxy_add_listener(\n        %s as *mut objects::wl_proxy,\n        "
+		   "listener as *mut extern fn(),\n        data\n    )\n"
 		   "}\n\n",
 		   interface->name, interface->name, interface->name,
-		   indent(14 + strlen(interface->name)),
 		   interface->name,
-		   interface->name,
-		   indent(37));
+		   interface->name);
 	}
 }
 
@@ -980,42 +985,51 @@ format_copyright(const char *copyright)
 static void
 emit_header(struct protocol *protocol, enum side side)
 {
+	if (side == SERVER) return; // Not needed.
 	struct interface *i;
 	const char *s = (side == SERVER) ? "SERVER" : "CLIENT";
 
-	if (protocol->copyright)
-		format_copyright(protocol->copyright);
+	/* if (protocol->copyright) */
+	/* 	format_copyright(protocol->copyright); */
 
-	printf("#ifndef %s_%s_PROTOCOL_H\n"
-	       "#define %s_%s_PROTOCOL_H\n"
-	       "\n"
-	       "#ifdef  __cplusplus\n"
-	       "extern \"C\" {\n"
-	       "#endif\n"
-	       "\n"
-	       "#include <stdint.h>\n"
-	       "#include <stddef.h>\n"
-	       "#include \"%s\"\n\n"
-	       "struct wl_client;\n"
-	       "struct wl_resource;\n\n",
-	       protocol->uppercase_name, s,
-	       protocol->uppercase_name, s,
-	       (side == SERVER) ? "wayland-util.h" : "wayland-client.h");
+	/* printf("#ifndef %s_%s_PROTOCOL_H\n" */
+	/*        "#define %s_%s_PROTOCOL_H\n" */
+	/*        "\n" */
+	/*        "#ifdef  __cplusplus\n" */
+	/*        "extern \"C\" {\n" */
+	/*        "#endif\n" */
+	/*        "\n" */
+	/*        "#include <stdint.h>\n" */
+	/*        "#include <stddef.h>\n" */
+	/*        "#include \"%s\"\n\n" */
+	/*        "struct wl_client;\n" */
+	/*        "struct wl_resource;\n\n", */
+	/*        protocol->uppercase_name, s, */
+	/*        protocol->uppercase_name, s, */
+	/*        (side == SERVER) ? "wayland-util.h" : "wayland-client.h"); */
 
-	wl_list_for_each(i, &protocol->interface_list, link)
-		printf("struct %s;\n", i->name);
-	printf("\n");
+        // TODO: Temporary
+        /* printf("// raw/types/objects.rs\n" */
+        /*        "#[repr(C)]\n" */
+        /*        "pub struct wl_client;\n" */
+        /*        "\n#[repr(C)]\n" */
+        /*        "pub struct wl_resource;\n"); */
+	/* wl_list_for_each(i, &protocol->interface_list, link) */
+	/* 	printf("\n#[repr(C)]\npub struct %s;\n", i->name); */
+	/* printf("\n"); */
+
+        // TODO: Temporary
+        /* printf("// raw/mod.rs\n"); */
+	/* wl_list_for_each(i, &protocol->interface_list, link) { */
+	/* 	printf("pub static %s_interface: wl_interface;\n", */
+	/* 	       i->name); */
+	/* } */
+	/* printf("\n"); */
 
 	wl_list_for_each(i, &protocol->interface_list, link) {
-		printf("extern const struct wl_interface "
-		       "%s_interface;\n",
-		       i->name);
-	}
-	printf("\n");
 
-	wl_list_for_each(i, &protocol->interface_list, link) {
-
-		emit_enumerations(i);
+		/* emit_enumerations(i); */ // TODO: Temporary
+            printf("// raw/protocol/%s.rs\n\n", i->name);
 
 		if (side == SERVER) {
 			emit_structs(&i->request_list, i, side);
@@ -1023,17 +1037,17 @@ emit_header(struct protocol *protocol, enum side side)
 			emit_opcode_versions(&i->event_list, i);
 			emit_event_wrappers(&i->event_list, i);
 		} else {
-			emit_structs(&i->event_list, i, side);
 			emit_opcodes(&i->request_list, i);
+			emit_structs(&i->event_list, i, side);
 			emit_stubs(&i->request_list, i);
 		}
 	}
 
-	printf("#ifdef  __cplusplus\n"
-	       "}\n"
-	       "#endif\n"
-	       "\n"
-	       "#endif\n");
+	/* printf("#ifdef  __cplusplus\n" */
+	/*        "}\n" */
+	/*        "#endif\n" */
+	/*        "\n" */
+	/*        "#endif\n"); */
 }
 
 static void
